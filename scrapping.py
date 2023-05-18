@@ -55,46 +55,57 @@ def get_list_of_comments(soup):
             final_list.append(url)
     return final_list
 
-def create_comment_list(comment_data):
-    comments = []
+def create_comment_list(comment_data, comments):
     users = []
     comment_users = []
-    for comment in comment_data['comments']:
-        family_name = '"commenterName":"' + comment['user']['family_name'] + '"'
-        comment_users.append(comment['user']['family_name'])
-        comment_text = '"comment": "' + comment['text'] + '"'
-        comment_users.append(comment['text'])
-        users.append(comment_users)  
-        comment_users = []  
-    comments.append(users)
+    if len(comment_data) > 0:
+        for comment in comment_data['comments']:
+            family_name = comment['user']['family_name']
+            comment_users.append(comment['user']['family_name'])
+            comment_text = comment['text']
+            comment_users.append(comment['text'])
+            users.append(comment_users)  
+            comment_users = []  
+            comment = {
+                "author": family_name,
+                "text": comment_text
+            }
+            comments.append(comment)
+
     return comments
 
-def get_description_of_news(news_list, param):
-    # i = 0
-    rabbitMQ_list_2 = []    
+def get_description_of_news(news_list, param, posts):
+    rabbitMQ_list_2 = []
     for news in news_list:
-        # news description part   
+        post = {
+            "article": None,
+            "comments": None
+        }
+        comments = []
+
+        # news description part
         response = get_response_from_url(news)
         soup = get_soup(response)
         news_description = get_news_descriptions_child(soup)
 
-        if type(param) == str:
-            # comment part 
+        post['article'] = news_description
+
+        if param:
+            # comment part
             comment_id = re.search(r"[0-9]{7}", news).group(0)
             comment_response = get_response_from_url(create_comment_url(comment_id))
             comment_soup = get_soup(comment_response)
-            comment_data = json.loads(str(comment_soup)) # deserializare
-            comment_list = create_comment_list(comment_data) # list of comments
+            comment_data = json.loads(str(comment_soup))  # deserializare
+            comment_list = create_comment_list(comment_data, comments)  # list of comments
+            if len(comment_list) > 0:
+                post['comments'] = comment_list
 
-            
             # rabbitmq list part
             rabbitMQ_list_2.append([news_description, comment_list])
-        else:            
+        else:
             rabbitMQ_list_2.append([news_description])
-        # if i == 10:
-        #     break    
-        # i += 1
-    return rabbitMQ_list_2    
+        posts.append(post)
+    return posts
 
 def create_comment_url(news_id):
     url_string = 'https://social.adh.reperio.news/adevarul.ro/comment/content/'
@@ -121,13 +132,20 @@ def insert_into_queue(lst):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('comments', type=str, nargs='?', default=None)
+parser.add_argument('--comments', action="store_true", default=None, required=False)
 args = parser.parse_args()
 param = args.comments
+
+posts = []
 
 response = get_response_from_url('https://adevarul.ro/') # response
 soup = get_soup(response)
 html_class = get_html_class(soup) 
 list_of_news_links = get_list_of_news(soup)
-list_news_description_and_comments = get_description_of_news(list_of_news_links, param)
+list_news_description_and_comments = get_description_of_news(list_of_news_links, param, posts)
 insert_into_queue(list_news_description_and_comments)
+
+json_str = json.dumps(posts)
+
+with open("adevarul.json", "w") as outfile:
+    outfile.write(json_str)
